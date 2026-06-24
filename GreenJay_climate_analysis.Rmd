@@ -1,0 +1,723 @@
+---
+title: "GreenJay_climatechange"
+output: html_document
+date: "2026-06-02"
+---
+
+```{r}
+
+library(dplyr)
+library(lubridate)
+library(tidyr)
+library(stringr)
+
+library(readxl)
+
+Hebbronville_climate <- read.csv("C://Users/calle/Downloads/Interior_STexas_temp_data/Hebbronville_temperature_data.csv")
+
+CarrizoSprings_climate <- read.csv("C://Users/calle/Downloads/Interior_STexas_temp_data/CarrizoSprings_temperature_data.csv")
+
+Encinal_climate <- read.csv("C://Users/calle/Downloads/Interior_STexas_temp_data/Encinal_climate_data.csv")
+
+AliceTX1_climate <- read.csv("C://Users/calle/Downloads/Interior_STexas_temp_data/AliceTX1_temperature_data.csv")
+
+Alice_Airport_climate <- read.csv("C://Users/calle/Downloads/Interior_STexas_temp_data/Alice_Airport_temperature_data.csv")
+
+Falfurrias_climate <- read.csv("C://Users/calle/Downloads/Interior_STexas_temp_data/Falfurrias_temperature_data.csv")
+
+Benavides_climate <- read.csv("C://Users/calle/Downloads/Interior_STexas_temp_data/Benavides_temperature_data.csv")
+
+Cotulla_climate <- read.csv("C://Users/calle/Downloads/Interior_STexas_temp_data/Cotulla_temperature_data.csv")
+
+Laredo_climate <- read.csv("C://Users/calle/Downloads/Interior_STexas_temp_data/Laredo_Station2_temperature_data.csv")
+
+Kingsville_climate <- read.csv("C://Users//calle/Downloads/Kingsville_temperature_data.csv")
+
+library(dplyr)
+
+Interior_STexas <- bind_rows(Hebbronville_climate, CarrizoSprings_climate, Encinal_climate, Kingsville_climate, AliceTX1_climate, Alice_Airport_climate, Falfurrias_climate, Benavides_climate, Cotulla_climate, Laredo_climate)
+
+```
+
+
+```{r}
+
+library(zoo)
+
+
+
+# dat should contain:
+# STATION, STATION_NAME, DATE, TMAX, TMIN, TOBS
+
+cold_metrics_station <- Interior_STexas %>%
+  mutate(
+
+    # Parse dates correctly
+    DATE = mdy(DATE),
+
+    # Extract year/month
+    year = year(DATE),
+    month = month(DATE),
+
+    # Define biological winter:
+    # Nov-Dec assigned to following year
+    # Example: Nov 1982-Mar 1983 = winter 1983
+    winter_year = if_else(
+      month %in% c(11, 12),
+      year + 1L,
+      year
+    ),
+
+    # Keep track of winter months, but DO NOT filter yet
+    winter_month = month %in% c(11, 12, 1, 2, 3),
+
+    # Severe freeze threshold
+    severe_freeze = TMIN <= 28,
+
+    # Daily mean temperature
+    daily_mean_temp = (TMAX + TMIN) / 2
+  ) %>%
+  arrange(STATION, winter_year, DATE) %>%
+  group_by(STATION, NAME, winter_year) %>%
+  summarise(
+
+    # Winter-only severe freeze days
+    severe_freeze_days =
+      sum(
+        severe_freeze[winter_month],
+        na.rm = TRUE
+      ),
+
+    # Winter-only longest consecutive severe freeze spell
+    max_consecutive_severe_freeze_days = {
+
+      x <- severe_freeze[winter_month]
+
+      x[is.na(x)] <- FALSE
+
+      if (all(!x)) {
+        0
+      } else {
+        max(rle(x)$lengths[rle(x)$values])
+      }
+    },
+
+    # Winter-only extreme minimum
+    annual_min_TMIN =
+      if_else(
+        all(is.na(TMIN[winter_month])),
+        NA_real_,
+        min(TMIN[winter_month], na.rm = TRUE)
+      ),
+
+    # Number of winter days with observed TMIN
+    n_days_observed =
+      sum(
+        !is.na(TMIN[winter_month])
+      ),
+
+    # Full-year mean temperature
+    mean_annual_temp =
+      mean(
+        daily_mean_temp,
+        na.rm = TRUE
+      ),
+
+    # Winter-only mean temperature
+    mean_winter_temp =
+      mean(
+        daily_mean_temp[winter_month],
+        na.rm = TRUE
+      ),
+
+    .groups = "drop"
+  )
+
+
+cold_metrics_station <- cold_metrics_station %>%
+  filter(n_days_observed >= 60)
+
+cold_metrics_station %>%
+  count(NAME)
+
+sort(unique(Interior_STexas$NAME))
+
+Interior_STexas %>%
+  filter(
+    str_detect(
+      NAME,
+      "ALICE INTERNATIONAL AIRPORT, TX US|COTULLA LA SALLE CO AIRPORT, TX US|BENAVIDES NUMBER 2, TX US"
+    )
+  ) %>%
+  group_by(NAME) %>%
+  summarise(
+
+    n_rows = n(),
+
+    n_TMIN =
+      sum(!is.na(TMIN)),
+
+    TMIN_class =
+      class(TMIN)[1],
+
+    min_DATE = min(DATE),
+    max_DATE = max(DATE),
+
+    .groups = "drop"
+  )
+
+cold_metrics_station <- cold_metrics_station %>%
+  mutate(
+    winter_year_c =
+      winter_year -
+      mean(winter_year, na.rm = TRUE)
+  )
+
+```
+
+
+
+
+```{r}
+# Regional averages across stations
+#-----------------------------------
+
+cold_metrics_regional <- cold_metrics_station %>%
+  group_by(winter_year) %>%
+  summarise(
+
+    mean_severe_freeze_days =
+      mean(severe_freeze_days, na.rm = TRUE),
+
+    mean_max_consecutive_severe_freeze_days =
+      mean(max_consecutive_severe_freeze_days,
+           na.rm = TRUE),
+
+    mean_annual_min_TMIN =
+      mean(annual_min_TMIN, na.rm = TRUE),
+
+    # Range across stations
+    min_station_severe_freeze_days =
+      min(severe_freeze_days, na.rm = TRUE),
+
+    max_station_severe_freeze_days =
+      max(severe_freeze_days, na.rm = TRUE),
+
+    min_station_consecutive_freeze_days =
+      min(max_consecutive_severe_freeze_days,
+          na.rm = TRUE),
+
+    max_station_consecutive_freeze_days =
+      max(max_consecutive_severe_freeze_days,
+          na.rm = TRUE),
+
+    n_stations =
+      n_distinct(STATION),
+
+    .groups = "drop"
+  )
+cold_metrics_regional <- cold_metrics_regional %>%
+  mutate(
+    decade = floor(winter_year / 10) * 10
+  )
+
+
+```
+
+Decade by decade summaries
+```{r}
+
+library(ggplot2)
+
+ggplot(
+  cold_metrics_station,
+  aes(
+    x = winter_year,
+    y = severe_freeze_days,
+    color = NAME
+  )
+) +
+
+  geom_line(alpha = 0.35) +
+
+  geom_smooth(
+    method = "gam",
+    formula = y ~ s(x, bs = "cs"),
+    se = FALSE,
+    linewidth = 1.2
+  ) +
+
+  scale_y_continuous(
+    limits = c(0, NA)
+  ) +
+
+  theme_classic()
+```
+
+```{r}
+ggplot(
+  cold_metrics_station,
+  aes(
+    x = winter_year,
+    y = max_consecutive_severe_freeze_days,
+    color = NAME
+  )
+) +
+
+  geom_line(alpha = 0.35) +
+
+  geom_smooth(
+    method = "gam",
+    formula = y ~ s(x, bs = "cs"),
+    se = FALSE,
+    linewidth = 1.2
+  ) +
+
+  scale_y_continuous(
+    limits = c(0, NA)
+  ) +
+
+  theme_classic()
+
+```
+
+
+Establishing colonization periods
+```{r}
+cold_metrics_station <- cold_metrics_station %>%
+  mutate(
+
+    colonization_period = case_when(
+
+      winter_year < 1960 ~
+        "Pre-expansion",
+
+      winter_year >= 1960 &
+        winter_year < 1990 ~
+        "Vagrancy & initial colonization",
+       winter_year >= 1990 ~
+        "Rapid expansion"
+
+    )
+  )
+
+
+cold_metrics_station$colonization_period <-
+  factor(
+    cold_metrics_station$colonization_period,
+    levels = c(
+      "Pre-expansion",
+      "Vagrancy & initial colonization",
+      "Expansion"
+    )
+  )
+
+cold_metrics_station_filtered <-
+  cold_metrics_station %>%
+  filter(
+    !(str_detect(NAME, "CARRIZO SPRINGS 3 S, TX US") &
+        winter_year >= 1997)
+  )
+
+```
+
+Plots showing different eras of colonization and expansion: severe freeze days
+
+```{r}
+
+p_severe <- ggplot(
+  cold_metrics_station,
+  aes(
+    x = winter_year,
+    y = severe_freeze_days,
+    group = NAME
+  )
+) +
+
+  # station trajectories
+  geom_line(
+    aes(color = NAME),
+    alpha = 0.45,
+    linewidth = 0.6
+  ) +
+
+  # regional mean
+  stat_summary(
+    aes(group = 1),
+    fun = mean,
+    geom = "line",
+    linewidth = 1.5,
+    color = "black"
+  ) +
+
+  # Green Jay colonization periods
+  geom_vline(
+    xintercept = c(1959.5, 1990.5),
+    linetype = "solid",
+    linewidth = 0.7
+  ) +
+
+  coord_cartesian(
+    ylim = c(0, NA)
+  ) +
+  scale_x_continuous(
+  breaks = seq(1930, 2030, by = 10),
+  expand = c(0.01,0)
+ )+
+
+  labs(
+    x = "Winter year",
+    y = "Number of days with Tmin ≤ 28°F",
+    color = "Station"
+  ) +
+ 
+ theme(
+  axis.title = element_text(size = 20),
+  axis.text = element_text(size = 19),
+  legend.text = element_text(size = 11),
+  legend.title = element_text(size = 12)
+ )+
+
+  theme_classic()
+
+
+ggsave(
+  "severe_freeze_days.png",
+  plot = p_severe,
+  width = 8,
+  height = 4,
+  dpi = 600,
+  bg = "white"
+)
+
+ 
+```
+
+
+```{r}
+
+consec_severe_freezes <- ggplot(
+  cold_metrics_station,
+  aes(
+    x = winter_year,
+    y = max_consecutive_severe_freeze_days,
+    group = NAME
+  )
+) +
+
+  geom_line(
+    aes(color = NAME),
+    alpha = 0.45,
+    linewidth = 0.6
+  ) +
+
+  stat_summary(
+    aes(group = 1),
+    fun = mean,
+    geom = "line",
+    linewidth = 1.5,
+    color = "black"
+  ) +
+
+  geom_vline(
+    xintercept = c(1959.5, 1990.5),
+    linetype = "solid",
+    linewidth = 0.7
+  ) +
+
+  coord_cartesian(
+    ylim = c(0, NA)
+  ) +
+ scale_x_continuous(
+  breaks = seq(1930, 2030, by = 10),
+  expand = c(0.01,0)
+ )+
+
+   labs(
+    x = "Winter year",
+    y = "Max. consecutive days with Tmin ≤ 28°F",
+    color = "Station"
+  ) +
+ 
+ theme(
+  axis.title = element_text(size = 17),
+  axis.text = element_text(size = 16),
+  legend.text = element_text(size = 11),
+  legend.title = element_text(size = 12)
+ )+
+
+  theme_classic()
+
+
+ggsave(
+  "consec_severe_freezes.png",
+  plot = consec_severe_freezes,
+  width = 8,
+  height = 4,
+  dpi = 600,
+  bg = "white"
+)
+
+```
+
+
+
+
+Did severe freeze days differ among Green Jay stages of colonization?
+
+```{r}
+
+library(tidyverse)
+library(glmmTMB)
+library(DHARMa)
+library(emmeans)
+
+# create Green Jay 'stages'
+cold_metrics_station <- cold_metrics_station %>%
+  mutate(
+    green_jay_period = case_when(
+      winter_year < 1960 ~ "Pre-colonization",
+      winter_year >= 1960 & winter_year < 1990 ~ "Vagrancy & Initial colonization",
+      winter_year > 1990 ~ "Continuing expansion"
+    ),
+    green_jay_period = factor(
+      green_jay_period,
+      levels = c(
+        "Pre-colonization",
+        "Vagrancy & Initial colonization",
+        "Continuing expansion"
+      )
+    ),
+
+    # centered year helps model stability
+    winter_year_c = winter_year - mean(winter_year, na.rm = TRUE)
+  )
+
+
+
+mod_severe_period <- glmmTMB(
+   severe_freeze_days ~ winter_year_c * green_jay_period +
+    (1 || NAME),
+  family = nbinom2,
+  data = cold_metrics_station
+)
+
+summary(mod_severe_period)
+car::Anova(mod_severe_period, type = 3)
+
+emm <- emmeans(mod_severe_period, ~green_jay_period)
+
+pairs(emm)
+
+
+
+emtrends(
+  mod_severe_period,
+  pairwise ~ green_jay_period,
+  var = "winter_year_c"
+)
+
+```
+
+Extreme minima
+```{r}
+
+ggplot(
+  cold_metrics_station,
+  aes(
+    winter_year,
+    annual_min_TMIN,
+    color = NAME
+  )
+) +
+  geom_line(alpha = 0.45) +
+  stat_summary(
+    aes(group = 1),
+    fun = mean,
+    geom = "line",
+    linewidth = 1.4,
+    color = "black"
+  ) +
+  geom_vline(
+    xintercept = c(1983, 1989),
+    linetype = "dashed"
+  ) +
+  theme_classic()
+
+
+
+
+
+
+```
+
+Extreme minima models
+```{r}
+
+library(lme4)
+
+mod_minima <- lmer(
+  annual_min_TMIN ~
+    winter_year_c * green_jay_period +
+    (1 | NAME),
+  data = cold_metrics_station
+)
+
+summary(mod_minima)
+anova(mod_minima)
+
+
+emtrends(
+  mod_minima,
+  pairwise ~ green_jay_period,
+  var = "winter_year_c"
+)
+
+citation("emmeans")
+
+citation("lme4")
+```
+
+
+
+Ok, what about average annual winter temp?
+```{r}
+
+ggplot(
+  cold_metrics_station,
+  aes(
+    x = winter_year,
+    y = mean_winter_temp,
+    group = NAME
+  )
+) +
+
+  geom_line(
+    aes(color = NAME),
+    alpha = 0.45,
+    linewidth = 0.6
+  ) +
+
+  stat_summary(
+    aes(group = 1),
+    fun = mean,
+    geom = "line",
+    linewidth = 1.5,
+    color = "black"
+  ) +
+ 
+  scale_x_continuous(
+    breaks = seq(1930, 2030, by = 10)
+  ) +
+
+  labs(
+    x = "Winter year",
+    y = "Mean winter temperature (°F)",
+    title = "Winter temperature trends in South Texas",
+    subtitle = "Black line = regional mean",
+    color = "Station"
+  ) +
+
+  theme_classic()
+
+
+```
+
+Mean winter temp model
+```{r}
+library(lme4)
+library(emmeans)
+
+
+
+mod_winter_temp <- lmer(
+  mean_winter_temp ~
+    winter_year_c * green_jay_period +
+    (1 | NAME),
+  data = cold_metrics_station
+)
+
+summary(mod_winter_temp)
+car::Anova(mod_winter_temp, type = 3)
+
+emtrends(
+  mod_winter_temp,
+  pairwise ~ green_jay_period,
+  var = "winter_year_c"
+)
+
+emm <- emmeans(mod_winter_temp, ~green_jay_period)
+
+pairs(emm)
+
+
+
+```
+
+```{r}
+
+ggplot(
+  cold_metrics_station,
+  aes(
+    x = winter_year,
+    y = mean_annual_temp,
+    group = NAME
+  )
+) +
+
+  geom_line(
+    aes(color = NAME),
+    alpha = 0.45,
+    linewidth = 0.6
+  ) +
+
+  stat_summary(
+    aes(group = 1),
+    fun = mean,
+    geom = "line",
+    linewidth = 1.5,
+    color = "black"
+  ) +
+
+  scale_x_continuous(
+    breaks = seq(1930, 2030, by = 10)
+  ) +
+
+  labs(
+    x = "Winter year",
+    y = "Mean annual temperature (°F)",
+    title = "Annual temperature trends in South Texas",
+    subtitle = "Black line = regional mean",
+    color = "Station"
+  ) +
+
+  theme_classic()
+
+
+```
+mean annual temp model
+```{r}
+
+mod_annual_temp <- lmer(
+  mean_annual_temp ~
+    winter_year_c * green_jay_period +
+    (1 | NAME),
+  data = cold_metrics_station
+)
+
+summary(mod_annual_temp)
+car::Anova(mod_annual_temp, type = 3)
+
+emtrends(
+  mod_annual_temp,
+  pairwise ~ green_jay_period,
+  var = "winter_year_c"
+)
+
+
+emm <- emmeans(mod_annual_temp, ~green_jay_period)
+
+pairs(emm)
+```
+
+
